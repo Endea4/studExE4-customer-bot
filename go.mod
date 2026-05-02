@@ -1,11 +1,11 @@
 module github.com/Endea4/studExE4-customer-bot
 
-go 1.21
+go 1.25.0
 
 require (
+	github.com/Endea4/studExE4-customer-bot/shared v0.0.0-00010101000000-000000000000
 	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/mdp/qrterminal/v3 v3.2.1
-	github.com/Endea4/studExE4-customer-bot/shared v0.0.0-00010101000000-000000000000
 	go.mau.fi/whatsmeow v0.0.0-20260421083005-5b8886176ff7
 	google.golang.org/protobuf v1.36.11
 )

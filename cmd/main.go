@@ -27,10 +27,13 @@ import (
 
 var apiGatewayURL string
 
-// Simple in-memory state machine for the personalization flow
+// Simple in-memory state machine for the flow
 type UserState struct {
-	Step int
-	Name string
+	Step         int
+	Name         string
+	IsDriver     bool
+	CustomerMode bool
+	IsOnline     bool
 }
 
 const (
@@ -110,18 +113,72 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 		// Check if we are currently tracking this user's state
 		state, exists := userStates[sender]
 		if !exists {
-			// If not in memory, try to register them
+			// Ensure user is registered and check driver status
 			isNewUser := registerUser(sender)
+			isDriver, isOnline := getDriverInfo(sender)
+
+			state = &UserState{
+				Step:         StepNormal,
+				IsDriver:     isDriver,
+				IsOnline:     isOnline,
+				CustomerMode: true,
+			}
+			userStates[sender] = state
+
 			if isNewUser {
-				// They are brand new! Start the personalization flow
-				userStates[sender] = &UserState{Step: StepAskName}
+				state.Step = StepAskName
 				sendMessage(client, senderJID, "Welcome to StudEx! 🎉\nTo get started, what is your *name*?")
 			} else {
-				// They already exist in the DB, treat as normal
-				userStates[sender] = &UserState{Step: StepNormal}
-				sendMessage(client, senderJID, "Welcome back to StudEx! (Command menu coming soon)")
+				if isDriver {
+					sendMessage(client, senderJID, "Welcome back! 🚗\n(Driver Mode is available. Type `!customerMode OFF` to switch)")
+				} else {
+					sendMessage(client, senderJID, "Welcome back to StudEx!")
+				}
 			}
 			return
+		}
+
+		// --- Command Handling ---
+		switch msgText {
+		case "!customerMode ON":
+			state.CustomerMode = true
+			sendMessage(client, senderJID, "Switched to *Customer Mode* 🛒")
+			return
+		case "!customerMode OFF":
+			if !state.IsDriver {
+				// Re-check in case they were added manually recently
+				isDriver, isOnline := getDriverInfo(sender)
+				if isDriver {
+					state.IsDriver = true
+					state.IsOnline = isOnline
+				} else {
+					sendMessage(client, senderJID, "Sorry, you don't have a Driver profile. ❌")
+					return
+				}
+			}
+			state.CustomerMode = false
+			sendMessage(client, senderJID, "Switched to *Driver Mode* 🚗")
+			return
+		case "!on":
+			if state.IsDriver && !state.CustomerMode {
+				if updateDriverStatus(sender, true) {
+					state.IsOnline = true
+					sendMessage(client, senderJID, "You are now *ONLINE* 🟢\nWaiting for orders...")
+				} else {
+					sendMessage(client, senderJID, "Failed to update status. ❌")
+				}
+				return
+			}
+		case "!off":
+			if state.IsDriver && !state.CustomerMode {
+				if updateDriverStatus(sender, false) {
+					state.IsOnline = false
+					sendMessage(client, senderJID, "You are now *OFFLINE* 🔴")
+				} else {
+					sendMessage(client, senderJID, "Failed to update status. ❌")
+				}
+				return
+			}
 		}
 
 		// Handle the conversational flow based on their current step
@@ -140,8 +197,15 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 			sendMessage(client, senderJID, "Awesome! Your profile is complete. ✅\nYou are now ready to order a ride. (Type !help for commands)")
 
 		case StepNormal:
-			// Just echo for now until we build the real commands
-			sendMessage(client, senderJID, fmt.Sprintf("You said: %s\n(Our AI and commands are still under construction!)", msgText))
+			if state.IsDriver && !state.CustomerMode {
+				if state.IsOnline {
+					sendMessage(client, senderJID, "You are currently *ONLINE* 🟢\nWaiting for orders...")
+				} else {
+					sendMessage(client, senderJID, "You are currently *OFFLINE* 🔴\nType `!on` to start working.")
+				}
+			} else {
+				sendMessage(client, senderJID, "Welcome to StudEx! Where do you want to go today? 📍\n(Type `!help` for more options)")
+			}
 		}
 	}
 }
@@ -188,6 +252,41 @@ func personalizeUser(phone, name, displayName, gender string) {
 	if resp.StatusCode == http.StatusOK {
 		fmt.Printf("Successfully personalized user: %s\n", phone)
 	}
+}
+
+func getDriverInfo(phone string) (bool, bool) {
+	url := fmt.Sprintf("%s/drivers/me?phone=%s", apiGatewayURL, phone)
+	resp, err := http.Get(url)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var driver struct {
+			PlateNumber string `json:"plate_number"`
+			IsOnline    bool   `json:"is_online"`
+		}
+		json.NewDecoder(resp.Body).Decode(&driver)
+		// A verified driver must have a plate number
+		return driver.PlateNumber != "", driver.IsOnline
+	}
+	return false, false
+}
+
+func updateDriverStatus(phone string, online bool) bool {
+	url := fmt.Sprintf("%s/drivers/me/status?phone=%s", apiGatewayURL, phone)
+	payload, _ := json.Marshal(map[string]interface{}{"is_online": online})
+	req, _ := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 func main() {
