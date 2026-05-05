@@ -29,11 +29,10 @@ var apiGatewayURL string
 
 // Simple in-memory state machine for the flow
 type UserState struct {
-	Step         int
-	Name         string
-	IsDriver     bool
-	CustomerMode bool
-	IsOnline     bool
+	Step     int
+	Name     string
+	IsDriver bool
+	IsOnline bool
 }
 
 const (
@@ -113,69 +112,51 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 		// Check if we are currently tracking this user's state
 		state, exists := userStates[sender]
 		if !exists {
-			// Ensure user is registered and check driver status
 			isNewUser := registerUser(sender)
 			isDriver, isOnline := getDriverInfo(sender)
 
 			state = &UserState{
-				Step:         StepNormal,
-				IsDriver:     isDriver,
-				IsOnline:     isOnline,
-				CustomerMode: true,
+				Step:     StepNormal,
+				IsDriver: isDriver,
+				IsOnline: isOnline,
 			}
 			userStates[sender] = state
 
 			if isNewUser {
 				state.Step = StepAskName
-				sendMessage(client, senderJID, "Welcome to StudEx! 🎉\nTo get started, what is your *name*?")
+				sendMessage(client, senderJID, "Welcome to StudEx!\nTo get started, what is your *name*?")
 			} else {
+				sendMessage(client, senderJID, "Welcome back to StudEx! Where do you want to go today?")
 				if isDriver {
-					sendMessage(client, senderJID, "Welcome back! 🚗\n(Driver Mode is available. Type `!customerMode OFF` to switch)")
-				} else {
-					sendMessage(client, senderJID, "Welcome back to StudEx!")
+					if isOnline {
+						sendMessage(client, senderJID, "You are *READY* \xf0\x9F\x9F\xA2 waiting for orders. Type `?unready` to go offline.")
+					} else {
+						sendMessage(client, senderJID, "You are *NOT READY* \xf0\x9F\x94\xB4 — Type `?ready` to start receiving orders.")
+					}
 				}
 			}
-			return
-		}
+		return
+	}
 
 		// --- Command Handling ---
 		switch msgText {
-		case "!customerMode ON":
-			state.CustomerMode = true
-			sendMessage(client, senderJID, "Switched to *Customer Mode* 🛒")
-			return
-		case "!customerMode OFF":
-			if !state.IsDriver {
-				// Re-check in case they were added manually recently
-				isDriver, isOnline := getDriverInfo(sender)
-				if isDriver {
-					state.IsDriver = true
-					state.IsOnline = isOnline
-				} else {
-					sendMessage(client, senderJID, "Sorry, you don't have a Driver profile. ❌")
-					return
-				}
-			}
-			state.CustomerMode = false
-			sendMessage(client, senderJID, "Switched to *Driver Mode* 🚗")
-			return
-		case "!on":
-			if state.IsDriver && !state.CustomerMode {
+		case "?ready":
+			if state.IsDriver {
 				if updateDriverStatus(sender, true) {
 					state.IsOnline = true
-					sendMessage(client, senderJID, "You are now *ONLINE* 🟢\nWaiting for orders...")
+					sendMessage(client, senderJID, "You are now *READY* \xf0\x9f\x9F\xA2\nWaiting for orders...")
 				} else {
-					sendMessage(client, senderJID, "Failed to update status. ❌")
+					sendMessage(client, senderJID, "Failed to update status. \xe2\x9d\x8c")
 				}
 				return
 			}
-		case "!off":
-			if state.IsDriver && !state.CustomerMode {
+		case "?unready":
+			if state.IsDriver {
 				if updateDriverStatus(sender, false) {
 					state.IsOnline = false
-					sendMessage(client, senderJID, "You are now *OFFLINE* 🔴")
+					sendMessage(client, senderJID, "You are now *NOT READY* \xf0\x9f\x94\xB4")
 				} else {
-					sendMessage(client, senderJID, "Failed to update status. ❌")
+					sendMessage(client, senderJID, "Failed to update status. \xe2\x9d\x8c")
 				}
 				return
 			}
@@ -186,25 +167,23 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 		case StepAskName:
 			state.Name = msgText
 			state.Step = StepAskGender
-			sendMessage(client, senderJID, fmt.Sprintf("Nice to meet you, %s! 👋\nLastly, what is your *gender*? (e.g., Male/Female)", state.Name))
+			sendMessage(client, senderJID, fmt.Sprintf("Nice to meet you, %s! \xf0\x9f\x91\x8b\nLastly, what is your *gender*? (e.g., Male/Female)", state.Name))
 
 		case StepAskGender:
 			gender := msgText
-			// We have both pieces of info, update the database!
 			personalizeUser(sender, state.Name, state.Name, gender)
-			
-			state.Step = StepNormal // Reset state to normal
-			sendMessage(client, senderJID, "Awesome! Your profile is complete. ✅\nYou are now ready to order a ride. (Type !help for commands)")
+
+			state.Step = StepNormal
+			sendMessage(client, senderJID, "Awesome! Your profile is complete. \xe2\x9c\x85\nYou are now ready to order a ride. (Type !help for commands)")
 
 		case StepNormal:
-			if state.IsDriver && !state.CustomerMode {
+			sendMessage(client, senderJID, "Welcome to StudEx! Where do you want to go today? \xf0\x9f\x93\x8d\n(Type `!help` for more options)")
+			if state.IsDriver {
 				if state.IsOnline {
-					sendMessage(client, senderJID, "You are currently *ONLINE* 🟢\nWaiting for orders...")
+					sendMessage(client, senderJID, "You are currently *READY* \xf0\x9f\x9F\xA2 — Type `?unready` to go offline.")
 				} else {
-					sendMessage(client, senderJID, "You are currently *OFFLINE* 🔴\nType `!on` to start working.")
+					sendMessage(client, senderJID, "You are *NOT READY* \xf0\x9f\x94\xB4 — Type `?ready` to start receiving orders.")
 				}
-			} else {
-				sendMessage(client, senderJID, "Welcome to StudEx! Where do you want to go today? 📍\n(Type `!help` for more options)")
 			}
 		}
 	}
@@ -265,18 +244,21 @@ func getDriverInfo(phone string) (bool, bool) {
 	if resp.StatusCode == http.StatusOK {
 		var driver struct {
 			PlateNumber string `json:"plate_number"`
-			IsOnline    bool   `json:"is_online"`
+			Status      string `json:"status"`
 		}
 		json.NewDecoder(resp.Body).Decode(&driver)
-		// A verified driver must have a plate number
-		return driver.PlateNumber != "", driver.IsOnline
+		return driver.PlateNumber != "", driver.Status == "ready"
 	}
 	return false, false
 }
 
 func updateDriverStatus(phone string, online bool) bool {
 	url := fmt.Sprintf("%s/drivers/me/status?phone=%s", apiGatewayURL, phone)
-	payload, _ := json.Marshal(map[string]interface{}{"is_online": online})
+	status := "offline"
+	if online {
+		status = "ready"
+	}
+	payload, _ := json.Marshal(map[string]interface{}{"status": status})
 	req, _ := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(payload))
 	req.Header.Set("Content-Type", "application/json")
 
