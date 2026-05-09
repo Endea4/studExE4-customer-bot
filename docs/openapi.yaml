@@ -1,0 +1,117 @@
+openapi: "3.0.3"
+info:
+  title: Customer Bot
+  description: |
+    WhatsApp bot powered by `whatsmeow`. Handles user onboarding and driver status toggling.
+    No HTTP endpoints — all interactions are via WhatsApp messages.
+  version: "1.0.0"
+
+tags:
+  - name: Bot
+    description: WhatsApp chat commands
+
+paths:
+  /bot/onboarding:
+    get:
+      tags: [Bot]
+      summary: First message from unknown number
+      description: |
+        When an unknown number messages the bot for the first time:
+        1. Bot calls `POST /users/register` to auto-create User + embedded Customer
+        2. Bot calls `GET /drivers/me?phone=` to check if they are also a driver
+        3. Bot asks "What is your *name*?"
+        4. User replies → bot asks "What is your *gender*?"
+        5. User replies → bot calls `PUT /users/{phone}/personalize`
+        6. Profile complete → "Where do you want to go today?"
+      responses:
+        "200":
+          description: Onboarding flow triggered
+
+  /bot/returning:
+    get:
+      tags: [Bot]
+      summary: Message from known user
+      description: |
+        Bot greets "Welcome back! Where do you want to go today?"
+        If user is also a driver, appends status line.
+      responses:
+        "200":
+          description: Welcome message sent
+
+  /bot/command/ready:
+    get:
+      tags: [Bot]
+      summary: "?ready — Set driver status to ready"
+      description: |
+        Calls `PUT /drivers/me/status` with `{"status": "ready"}`.
+        Bot replies: "You are now *READY* 🟢 — Waiting for orders..."
+      responses:
+        "200":
+          description: Status updated to ready
+
+  /bot/command/unready:
+    get:
+      tags: [Bot]
+      summary: "?unready — Set driver status to offline"
+      description: |
+        Calls `PUT /drivers/me/status` with `{"status": "offline"}`.
+        Bot replies: "You are now *NOT READY* 🔴"
+      responses:
+        "200":
+          description: Status updated to offline
+
+  /bot/command/help:
+    get:
+      tags: [Bot]
+      summary: "!help — Show help menu"
+      responses:
+        "200":
+          description: Help menu sent
+
+components:
+  schemas:
+    BotCommand:
+      type: object
+      properties:
+        command:
+          type: string
+          enum: ["?ready", "?unready", "!help"]
+        description:
+          type: string
+        api_call:
+          type: object
+          properties:
+            method:
+              type: string
+            url:
+              type: string
+            body:
+              type: object
+
+    BotFlow:
+      type: object
+      description: State machine for user interaction
+      properties:
+        step:
+          type: integer
+          enum: [0, 1, 2]
+          description: "0=Normal, 1=AskName, 2=AskGender"
+        is_driver:
+          type: boolean
+          description: Has a driver profile linked
+        is_online:
+          type: boolean
+          description: "Derived from status == 'ready'"
+
+    UserState:
+      type: object
+      properties:
+        Step:
+          type: integer
+          description: Current onboarding step
+        Name:
+          type: string
+        IsDriver:
+          type: boolean
+        IsOnline:
+          type: boolean
