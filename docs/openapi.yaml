@@ -2,7 +2,7 @@ openapi: "3.0.3"
 info:
   title: Customer Bot
   description: |
-    WhatsApp bot powered by `whatsmeow`. Handles user onboarding and driver status toggling.
+    WhatsApp bot powered by `whatsmeow`. Handles user onboarding, order creation, and driver status toggling.
     No HTTP endpoints — all interactions are via WhatsApp messages.
   version: "1.0.0"
 
@@ -60,10 +60,32 @@ paths:
         "200":
           description: Status updated to offline
 
+  /bot/command/order:
+    get:
+      tags: [Bot]
+      summary: "?order — Create a new order"
+      description: |
+        Creates a trip order via the trip-service.
+
+        **Format:** `?order <origin_lat>,<origin_lng>,<dest_lat>,<dest_lng>,<service_type>,<request_notes>`
+
+        **Example:** `?order -6.9175,107.6191,-6.9260,107.6105,jastip,Beliin kopi Starbucks`
+
+        **Flow:**
+        1. Bot parses and validates coordinates and service type (`jastip` or `anjem`)
+        2. Bot looks up user `_id` via `GET /users/{phone}` (through API Gateway)
+        3. Bot creates order via `POST /orders` with status `searching`
+        4. Bot replies with order ID, status, and "Searching for a driver..."
+      responses:
+        "200":
+          description: Order created successfully
+        "400":
+          description: Invalid format or coordinates
+
   /bot/command/help:
     get:
       tags: [Bot]
-      summary: "!help — Show help menu"
+      summary: "?help — Show help menu"
       responses:
         "200":
           description: Help menu sent
@@ -75,7 +97,7 @@ components:
       properties:
         command:
           type: string
-          enum: ["?ready", "?unready", "!help"]
+          enum: ["?order", "?ready", "?unready", "?help"]
         description:
           type: string
         api_call:

@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -139,12 +142,49 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 	}
 
 		// --- Command Handling ---
+		if strings.HasPrefix(msgText, "?order") {
+			re := regexp.MustCompile(`^\?order\s+(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(jastip|anjem)\s*,\s*(.+)$`)
+			matches := re.FindStringSubmatch(msgText)
+			if matches == nil {
+				sendMessage(client, senderJID, "Invalid format.\n\nUsage:\n?order <origin_lat>,<origin_lng>,<dest_lat>,<dest_lng>,<service_type>,<request_notes>\n\nExample:\n?order -6.9175,107.6191,-6.9260,107.6105,jastip,Beliin kopi Starbucks")
+				return
+			}
+
+			originLat, err1 := strconv.ParseFloat(matches[1], 64)
+			originLng, err2 := strconv.ParseFloat(matches[2], 64)
+			destLat, err3 := strconv.ParseFloat(matches[3], 64)
+			destLng, err4 := strconv.ParseFloat(matches[4], 64)
+			if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+				sendMessage(client, senderJID, "Invalid coordinates. Please provide valid latitude/longitude values.")
+				return
+			}
+
+			serviceType := matches[5]
+			requestNotes := strings.TrimSpace(matches[6])
+
+			sendMessage(client, senderJID, "Creating your order...")
+			userID := getUserByPhone(sender)
+			if userID == "" {
+				sendMessage(client, senderJID, "Failed to find your account. Please make sure you are registered.")
+				return
+			}
+
+			orderID, status := createOrder(userID, originLat, originLng, destLat, destLng, serviceType, requestNotes)
+			if orderID == "" {
+				sendMessage(client, senderJID, "Failed to create order. Please try again.")
+				return
+			}
+
+			sendMessage(client, senderJID, fmt.Sprintf("Order created! \xe2\x9c\x85\n\nID: %s\nStatus: %s\nService: %s\nNotes: %s\n\nSearching for a driver...", orderID, status, serviceType, requestNotes))
+			return
+		}
+
 		switch msgText {
 		case "?ready":
 			if state.IsDriver {
 				if updateDriverStatus(sender, true) {
 					state.IsOnline = true
-					sendMessage(client, senderJID, "You are now *READY* \xf0\x9f\x9F\xA2\nWaiting for orders...")
+					sendMessage(client, senderJID, "You are now *READY* \xf0\x9f\x9f\x9f\xa2\nWaiting for orders...")
 				} else {
 					sendMessage(client, senderJID, "Failed to update status. \xe2\x9d\x8c")
 				}
@@ -154,12 +194,16 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 			if state.IsDriver {
 				if updateDriverStatus(sender, false) {
 					state.IsOnline = false
-					sendMessage(client, senderJID, "You are now *NOT READY* \xf0\x9f\x94\xB4")
+					sendMessage(client, senderJID, "You are now *NOT READY* \xf0\x9f\x94\xb4")
 				} else {
 					sendMessage(client, senderJID, "Failed to update status. \xe2\x9d\x8c")
 				}
 				return
 			}
+		case "?help":
+			helpText := "*Available Commands:*\n\n?order <lat>,<lng>,<lat>,<lng>,<type>,<notes>\n  Create a new order\n\n?ready\n  Go online (drivers only)\n\n?unready\n  Go offline (drivers only)"
+			sendMessage(client, senderJID, helpText)
+			return
 		}
 
 		// Handle the conversational flow based on their current step
@@ -269,6 +313,61 @@ func updateDriverStatus(phone string, online bool) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+func getUserByPhone(phone string) string {
+	url := fmt.Sprintf("%s/users/%s", apiGatewayURL, phone)
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Printf("Error getting user by phone: %v\n", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var user struct {
+			ID string `json:"id"`
+		}
+		json.NewDecoder(resp.Body).Decode(&user)
+		return user.ID
+	}
+	return ""
+}
+
+func createOrder(userID string, originLat, originLng, destLat, destLng float64, serviceType, requestNotes string) (string, string) {
+	url := fmt.Sprintf("%s/orders", apiGatewayURL)
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"user_id":         userID,
+		"origin_lat":      originLat,
+		"origin_lng":      originLng,
+		"destination_lat": destLat,
+		"destination_lng": destLng,
+		"service_type":    serviceType,
+		"request_notes":   requestNotes,
+	})
+
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("Error creating order: %v\n", err)
+		return "", ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusCreated {
+		var order struct {
+			ID     string  `json:"id"`
+			Status string  `json:"status"`
+			FinalPrice float64 `json:"final_price"`
+		}
+		json.NewDecoder(resp.Body).Decode(&order)
+		return order.ID, order.Status
+	}
+	return "", ""
 }
 
 func main() {
