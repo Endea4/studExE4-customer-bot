@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -26,11 +27,14 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/Endea4/studExE4-customer-bot/shared/config"
+	"github.com/gin-gonic/gin"
 )
 
 var apiGatewayURL string
+var waClient *whatsmeow.Client
 
-// Simple in-memory state machine for the flow
+var userSessions = make(map[string]types.JID)
+
 type UserState struct {
 	Step     int
 	Name     string
@@ -168,6 +172,8 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 				sendMessage(client, senderJID, "Failed to find your account. Please make sure you are registered.")
 				return
 			}
+
+			userSessions[userID] = senderJID
 
 			orderID, status := createOrder(userID, originLat, originLng, destLat, destLng, serviceType, requestNotes)
 			if orderID == "" {
@@ -370,6 +376,35 @@ func createOrder(userID string, originLat, originLng, destLat, destLng float64, 
 	return "", ""
 }
 
+func handleOrderAccepted(c *gin.Context) {
+	var payload struct {
+		OrderID    string      `json:"order_id"`
+		UserID     string      `json:"user_id"`
+		DriverID   interface{} `json:"driver_id"`
+		FinalPrice float64     `json:"final_price"`
+		Status     string      `json:"status"`
+		ServiceType string    `json:"service_type"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	jid, exists := userSessions[payload.UserID]
+	if !exists {
+		fmt.Printf("no JID found for user_id: %s\n", payload.UserID)
+		c.JSON(http.StatusOK, gin.H{"message": "no session found"})
+		return
+	}
+
+	msg := fmt.Sprintf("Driver found! \xe2\x9c\x85\n\nOrder: %s\nService: %s\nFee: Rp %.0f\nStatus: Driver is on the way",
+		payload.OrderID, payload.ServiceType, payload.FinalPrice)
+
+	sendMessage(waClient, jid, msg)
+
+	c.JSON(http.StatusOK, gin.H{"message": "notification sent"})
+}
+
 func main() {
 	config.LoadConfig()
 	apiGatewayURL = config.GetEnv("API_GATEWAY_URL", "http://localhost:8080")
@@ -387,6 +422,7 @@ func main() {
 
 	clientLog := waLog.Stdout("Client", "DEBUG", true)
 	client := whatsmeow.NewClient(deviceRes, clientLog)
+	waClient = client
 	client.AddEventHandler(func(evt interface{}) {
 		eventHandler(evt, client)
 	})
@@ -411,6 +447,17 @@ func main() {
 			panic(err)
 		}
 	}
+
+	callbackPort := config.GetEnv("CALLBACK_PORT", "9084")
+	gin.SetMode(gin.ReleaseMode)
+	callbackRouter := gin.Default()
+	callbackRouter.POST("/callback/order-accepted", handleOrderAccepted)
+	go func() {
+		fmt.Printf("Callback server starting on port %s...\n", callbackPort)
+		if err := callbackRouter.Run(":" + callbackPort); err != nil {
+			log.Fatalf("callback server error: %v", err)
+		}
+	}()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
