@@ -1,0 +1,15 @@
+services:
+  customer-bot:
+    build: .
+    container_name: studexe4-customer-bot
+    ports:
+      - "9088:9088"
+    env_file:
+      - .env.example
+    networks:
+      - studex-net
+    restart: unless-stopped
+
+networks:
+  studex-net:
+    driver: bridge
