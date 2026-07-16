@@ -2285,6 +2285,20 @@ func handleRelayEvent(client *whatsmeow.Client, evt events.Event) {
 			return
 		}
 
+	case events.EventTripBargaining:
+		var data events.TripBargainingData
+		if json.Unmarshal(dataBytes, &data) != nil {
+			return
+		}
+		driverPhone := resolvePhone(data.DriverRefID)
+		customerPhone := resolvePhone(data.CustomerRefID)
+		if strings.HasPrefix(driverPhone, "62") && data.LastBidder == "customer" {
+			sendMessage(client, waJID(driverPhone), fmt.Sprintf("Customer bids Rp %.0f\nReason: -\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", data.CurrentBidPrice))
+		}
+		if strings.HasPrefix(customerPhone, "62") && data.LastBidder == "driver" {
+			sendMessage(client, waJID(customerPhone), fmt.Sprintf("Driver bids Rp %.0f\nReason: -\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", data.CurrentBidPrice))
+		}
+
 	case events.EventTripStarted:
 		var data events.TripStartedData
 		if json.Unmarshal(dataBytes, &data) != nil {
