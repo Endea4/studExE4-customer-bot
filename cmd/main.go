@@ -26,8 +26,8 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/Endea4/studExE4-shared/config"
-	"github.com/Endea4/studExE4-shared/events"
+	"github.com/Endea4/studExE4-customer-bot/internal/shared/config"
+	"github.com/Endea4/studExE4-customer-bot/internal/shared/events"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -39,6 +39,7 @@ func logErr(format string, args ...interface{}) {
 }
 
 var apiGatewayURL string
+var wabaURL string
 
 var waClient *whatsmeow.Client
 var activeTripPartner = make(map[string]string)
@@ -475,7 +476,7 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 						}
 						sendMessage(client, senderJID, fmt.Sprintf("Trip accepted! Rp %.0f\n\n?bid <amount> <reason> — Bid a price\n?start — Start trip", state.CurrentBidPrice))
 						if custPhone != "" {
-							sendMessage(client, waJID(custPhone), fmt.Sprintf("Driver accepted! Rp %.0f\n\n?bid <amount> <reason> — Bid a price", state.CurrentBidPrice))
+							notifyWABA(custPhone, "driver_accepted", state.CurrentBidPrice, state.ActiveTrip)
 						}
 						saveChatMessage(sender, "driver", "system", "Trip accepted")
 						saveChatMessage(custPhone, "customer", "system", "Trip accepted")
@@ -1400,6 +1401,19 @@ func getDriverActiveTrip(driverPhone string) map[string]interface{} {
 	return nil
 }
 
+func notifyWABA(phone, eventType string, price float64, orderID string) {
+	if wabaURL == "" {
+		return
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"phone": phone,
+		"type":  eventType,
+		"price": price,
+		"order": orderID,
+	})
+	http.Post(wabaURL+"/api/notify", "application/json", bytes.NewBuffer(body))
+}
+
 func acceptTrip(tripID string) bool {
 	url := fmt.Sprintf("%s/trips/%s/accept", apiGatewayURL, tripID)
 	req, _ := http.NewRequest(http.MethodPut, url, nil)
@@ -2227,7 +2241,7 @@ func handleRelayEvent(client *whatsmeow.Client, evt events.Event) {
 				saveUserState(customerPhone, custState)
 			}
 		}
-		sendMessage(client, waJID(customerPhone), custMsg)
+		notifyWABA(customerPhone, "driver_found", estimatedPrice, data.OrderID)
 
 		go func() {
 			orderID := data.OrderID
@@ -2530,7 +2544,7 @@ func handleMenuLetter(client *whatsmeow.Client, sender string, senderJID types.J
 					}
 					sendMessage(client, senderJID, fmt.Sprintf("Trip accepted! Rp %.0f\n\n?bid <amount> <reason> — Bid a price\n?start — Start trip", state.CurrentBidPrice))
 					if custPhone != "" {
-						sendMessage(client, waJID(custPhone), fmt.Sprintf("Driver accepted! Rp %.0f\n\n?bid <amount> <reason> — Bid a price", state.CurrentBidPrice))
+						notifyWABA(custPhone, "driver_accepted", state.CurrentBidPrice, state.ActiveTrip)
 					}
 					saveChatMessage(drvPhone, "driver", "system", "Trip accepted")
 					saveChatMessage(custPhone, "customer", "system", "Trip accepted")
@@ -3135,6 +3149,7 @@ func reconcileDriverStates() {
 func main() {
 	config.LoadConfig()
 	apiGatewayURL = config.GetEnv("API_GATEWAY_URL", "http://localhost:9080")
+	wabaURL = config.GetEnv("WABA_SERVICE_URL", "http://localhost:9089")
 	redisAddr := config.GetEnv("REDIS_ADDR", "localhost:6379")
 	botPort := config.GetEnv("BOT_PORT", "9088")
 
@@ -3246,8 +3261,14 @@ func runBot(redisAddr string) error {
 			if evt.Event == "code" {
 				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 				fmt.Println("QR code generated. Please scan with your WhatsApp app.")
+				if rdb != nil {
+					rdb.Set(context.Background(), "studex:wa:qr_code", evt.Code, 5*time.Minute)
+				}
 			} else {
 				fmt.Println("QR channel event:", evt.Event)
+				if evt.Event == "connected" && rdb != nil {
+					rdb.Del(context.Background(), "studex:wa:qr_code")
+				}
 			}
 		}
 	} else {
