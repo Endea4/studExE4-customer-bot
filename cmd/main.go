@@ -115,7 +115,7 @@ func sendMessage(client *whatsmeow.Client, to types.JID, text string) {
 		preview = preview[:80] + "..."
 	}
 		fmt.Printf("[SEND] to=%s text=%q\n", to.User, preview)
-	logWAChat("out", to.User, "BOT", text)
+	logWAChat("out", to.User, "WHATSMEOW", text)
 	client.SendChatPresence(context.Background(), to, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	humanPause()
 	randomDelay()
@@ -129,7 +129,7 @@ func sendMessage(client *whatsmeow.Client, to types.JID, text string) {
 
 func relayMessage(client *whatsmeow.Client, to types.JID, text string) {
 	fmt.Printf("[RELAY] to=%s text=%q\n", to.User, text)
-	logWAChat("out", to.User, "BOT", text)
+	logWAChat("out", to.User, "WHATSMEOW", text)
 	client.SendChatPresence(context.Background(), to, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	randomDelay()
 	client.SendChatPresence(context.Background(), to, types.ChatPresencePaused, types.ChatPresenceMediaText)
@@ -142,7 +142,7 @@ func relayMessage(client *whatsmeow.Client, to types.JID, text string) {
 
 func relayMedia(client *whatsmeow.Client, from types.JID, to types.JID, msg *waProto.Message, mediaType string) {
 	fmt.Printf("[RELAY-MEDIA] from=%s to=%s type=%s\n", from.User, to.User, mediaType)
-	logWAChat("out", to.User, "BOT", "[media] "+mediaType)
+	logWAChat("out", to.User, "WHATSMEOW", "[media] "+mediaType)
 	client.SendChatPresence(context.Background(), to, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	randomDelay()
 	client.SendChatPresence(context.Background(), to, types.ChatPresencePaused, types.ChatPresenceMediaText)
@@ -160,6 +160,7 @@ func sendMessages(client *whatsmeow.Client, to types.JID, texts []string) {
 
 func sendLocation(client *whatsmeow.Client, to types.JID, lat, lng float64, name string) {
 	fmt.Printf("[SEND-LOC] to=%s lat=%.4f lng=%.4f name=%s\n", to.User, lat, lng, name)
+	logWAChat("out", to.User, "WHATSMEOW", fmt.Sprintf("[location] %.4f,%.4f %s", lat, lng, name))
 	msg := &waProto.Message{
 		LocationMessage: &waProto.LocationMessage{
 			DegreesLatitude:  proto.Float64(lat),
