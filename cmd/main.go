@@ -2276,11 +2276,12 @@ func handleRelayEvent(client *whatsmeow.Client, evt events.Event) {
 				markDriverOffline(check.refID)
 				time.Sleep(300 * time.Millisecond)
 				markDriverOnline(check.refID)
+				lat, lng := 0.0, 0.0
 				if check.gpsActive && check.location != nil {
-					lat, _ := check.location["latitude"].(float64)
-					lng, _ := check.location["longitude"].(float64)
-					addCandidateToPool(check.refID, lat, lng)
+					lat, _ = check.location["latitude"].(float64)
+					lng, _ = check.location["longitude"].(float64)
 				}
+				addCandidateToPool(check.refID, lat, lng)
 			}
 			sendMessage(client, waJID(drvPhone), "No response (1 min) — match auto-rejected. Waiting for next trip...")
 			sendMessage(client, waJID(custPhone), "Driver did not respond. Searching for another driver...\nPlease wait.")
@@ -2366,13 +2367,14 @@ func handleRelayEvent(client *whatsmeow.Client, evt events.Event) {
 				time.Sleep(2 * time.Second)
 				check := checkDriverGpsAndLocation(driverPhone)
 				if check.refID != "" {
+					markDriverOnline(check.refID)
+					lat, lng := 0.0, 0.0
 					if check.gpsActive && check.location != nil {
-						markDriverOnline(check.refID)
-						lat, _ := check.location["latitude"].(float64)
-						lng, _ := check.location["longitude"].(float64)
+						lat, _ = check.location["latitude"].(float64)
+						lng, _ = check.location["longitude"].(float64)
 						registerDriverLocation(check.refID, lat, lng)
-						addCandidateToPool(check.refID, lat, lng)
 					}
+					addCandidateToPool(check.refID, lat, lng)
 					updateDriverStatus(driverPhone, true)
 				}
 				drvState, ok := loadUserState(driverPhone)
