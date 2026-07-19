@@ -2576,6 +2576,38 @@ func handleMenuLetter(client *whatsmeow.Client, sender string, senderJID types.J
 					sendMessage(client, senderJID, "Failed to accept trip.")
 				}
 			} else if state.ActiveTrip != "" {
+				for i := 0; i < 5; i++ {
+					time.Sleep(300 * time.Millisecond)
+					trip = getDriverActiveTrip(sender)
+					if trip != nil && trip["status"].(string) == "pending_acceptance" {
+						if acceptTrip(trip["id"].(string)) {
+							state.ActiveTrip = trip["id"].(string)
+							state.LastBidder = ""
+							drvPhone := sender
+							custPhone := resolvePhone(fmt.Sprintf("%v", trip["customer_ref_id"]))
+							if custPhone != "" && strings.HasPrefix(custPhone, "62") {
+								savePartner(drvPhone, custPhone)
+								savePartner(custPhone, drvPhone)
+							}
+							sessionID := saveChatSession(trip["id"].(string), trip["order_id"].(string), drvPhone, custPhone)
+							state.ChatSessionID = sessionID
+							if custState, ok := loadUserState(custPhone); ok && custState != nil {
+								custState.ChatSessionID = sessionID
+								custState.CurrentBidPrice = state.CurrentBidPrice
+								custState.LastBidder = ""
+								saveUserState(custPhone, custState)
+							}
+							sendMessage(client, senderJID, fmt.Sprintf("Trip accepted! Rp %.0f\n\n?bid <amount> <reason> — Bid a price\n?start — Start trip", state.CurrentBidPrice))
+							if custPhone != "" {
+								notifyWABA(custPhone, "driver_accepted", state.CurrentBidPrice, state.ActiveTrip)
+							}
+							saveChatMessage(drvPhone, "driver", "system", "Trip accepted")
+							saveChatMessage(custPhone, "customer", "system", "Trip accepted")
+							state.MenuContext = "trip"
+							return true
+						}
+					}
+				}
 				check := checkDriverGpsAndLocation(sender)
 				if check.refID != "" {
 					markDriverOffline(check.refID)
