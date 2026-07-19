@@ -2311,6 +2311,31 @@ func handleRelayEvent(client *whatsmeow.Client, evt events.Event) {
 			sendMessage(client, waJID(customerPhone), fmt.Sprintf("Driver bids Rp %.0f\nReason: -\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", data.CurrentBidPrice))
 		}
 
+	case "trip.accepted":
+		var data events.TripStartedData
+		if json.Unmarshal(dataBytes, &data) != nil {
+			return
+		}
+		driverPhone := resolvePhone(data.DriverRefID)
+		customerPhone := resolvePhone(data.CustomerRefID)
+		if strings.HasPrefix(driverPhone, "62") {
+			sendMessage(client, waJID(customerPhone), "Driver has accepted your trip, they are on their way!")
+		}
+
+	case "trip.deal":
+		var data events.TripDealData
+		if json.Unmarshal(dataBytes, &data) != nil {
+			return
+		}
+		driverPhone := resolvePhone(data.DriverRefID)
+		customerPhone := resolvePhone(data.CustomerRefID)
+		if strings.HasPrefix(driverPhone, "62") {
+			sendMessage(client, waJID(driverPhone), fmt.Sprintf("Deal confirmed! Harga: Rp %.0f\n\n?start — ketika penumpang sudah naik", data.FinalPrice))
+		}
+		if strings.HasPrefix(customerPhone, "62") {
+			sendMessage(client, waJID(customerPhone), fmt.Sprintf("Driver accepted the deal! Harga: Rp %.0f\n\nWaiting for driver to start...", data.FinalPrice))
+		}
+
 	case events.EventTripStarted:
 		var data events.TripStartedData
 		if json.Unmarshal(dataBytes, &data) != nil {
