@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -1673,12 +1674,15 @@ func submitRating(sender, raterType, rateeID, tripID, orderID string, score int,
 		"score":      score,
 		"review":     review,
 	})
+	log.Printf("[RATING] posting to %s payload=%s", url, string(payload))
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		logErr("submitRating HTTP failed: rater=%s err=%v", sender, err)
 		return false
 	}
 	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("[RATING] response status=%d body=%s", resp.StatusCode, string(bodyBytes))
 	return resp.StatusCode == http.StatusCreated
 }
 
@@ -3055,6 +3059,7 @@ func doRate(client *whatsmeow.Client, sender string, senderJID types.JID, state 
 		tripID, _ = trip["id"].(string)
 		orderID, _ = trip["order_id"].(string)
 		rateeID, _ = trip["customer_ref_id"].(string)
+		log.Printf("[RATING] doRate driver tripID=%s orderID=%s rateeID=%s raterID=%s", tripID, orderID, rateeID, raterID)
 	} else {
 		raterType = "customer"
 		trip := getCustomerActiveTrip(sender)
@@ -3224,6 +3229,29 @@ func main() {
 				"active_trips":     len(activeTripPartner),
 				"gps_relay_active": gpsRelayActive.Load() == 1,
 			})
+		})
+		mux.HandleFunc("/admin/send-text", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req struct {
+				Phone string `json:"phone"`
+				Text  string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Phone == "" || req.Text == "" {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			if waClient == nil || !waClient.IsConnected() {
+				http.Error(w, "bot not connected", http.StatusServiceUnavailable)
+				return
+			}
+			jid := waJID(req.Phone)
+			sendMessage(waClient, jid, req.Text)
+			logWAChat("out", req.Phone, "BOT", req.Text)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		})
 		mux.HandleFunc("/admin/reset-state", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {
