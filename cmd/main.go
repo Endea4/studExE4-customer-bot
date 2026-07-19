@@ -129,6 +129,7 @@ func sendMessage(client *whatsmeow.Client, to types.JID, text string) {
 
 func relayMessage(client *whatsmeow.Client, to types.JID, text string) {
 	fmt.Printf("[RELAY] to=%s text=%q\n", to.User, text)
+	logWAChat("out", to.User, "BOT", text)
 	client.SendChatPresence(context.Background(), to, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	randomDelay()
 	client.SendChatPresence(context.Background(), to, types.ChatPresencePaused, types.ChatPresenceMediaText)
@@ -141,6 +142,7 @@ func relayMessage(client *whatsmeow.Client, to types.JID, text string) {
 
 func relayMedia(client *whatsmeow.Client, from types.JID, to types.JID, msg *waProto.Message, mediaType string) {
 	fmt.Printf("[RELAY-MEDIA] from=%s to=%s type=%s\n", from.User, to.User, mediaType)
+	logWAChat("out", to.User, "BOT", "[media] "+mediaType)
 	client.SendChatPresence(context.Background(), to, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	randomDelay()
 	client.SendChatPresence(context.Background(), to, types.ChatPresencePaused, types.ChatPresenceMediaText)
@@ -542,6 +544,10 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 			if state.IsDriver {
 				trip := getDriverActiveTrip(sender)
 				if trip != nil && (trip["status"].(string) == "deal" || trip["status"].(string) == "accepted") {
+					if state.LastBidder == "" && state.CurrentBidPrice <= 0 {
+						sendMessage(client, senderJID, "Please *?bid <amount> <reason>* first to set a price, then ?start.")
+						return
+					}
 				if startTrip(trip["id"].(string)) {
 					sendMessage(client, senderJID, "Trip started!\n\nq: Complete (Paid)\nw: Complete (Debt)")
 					state.MenuContext = "complete"
@@ -2898,12 +2904,12 @@ func doBid(client *whatsmeow.Client, sender string, senderJID types.JID, state *
 			state.LastBidder = "driver"
 			custPhone := resolvePhone(fmt.Sprintf("%v", trip["customer_ref_id"]))
 			if custPhone != "" {
-						sendMessage(client, waJID(custPhone), fmt.Sprintf("Driver bids Rp %.0f\nReason: %s\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", amount, reason))
-						if custState, ok := loadUserState(custPhone); ok && custState != nil {
-							custState.CurrentBidPrice = amount
-							custState.LastBidder = "driver"
-							saveUserState(custPhone, custState)
-						}
+					sendMessage(client, waJID(custPhone), fmt.Sprintf("Driver bids Rp %.0f\nReason: %s\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", amount, reason))
+					if custState, ok := loadUserState(custPhone); ok && custState != nil {
+						custState.CurrentBidPrice = amount
+						custState.LastBidder = "driver"
+						saveUserState(custPhone, custState)
+					}
 			}
 			sendMessage(client, senderJID, fmt.Sprintf("Bid sent: Rp %.0f\nReason: %s\nWaiting for customer response...", amount, reason))
 		} else {
