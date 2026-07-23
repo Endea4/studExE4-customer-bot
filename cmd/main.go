@@ -3334,46 +3334,6 @@ func runBot(redisAddr string) error {
 		eventHandler(evt, client)
 	})
 
-	if client.Store.ID == nil {
-		qrChan, _ := client.GetQRChannel(context.Background())
-		err = client.Connect()
-		if err != nil {
-			panic(err)
-		}
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-				fmt.Println("QR code generated. Please scan with your WhatsApp app.")
-				if rdb != nil {
-					rdb.Set(context.Background(), "studex:wa:qr_code", evt.Code, 5*time.Minute)
-				}
-			} else {
-				fmt.Println("QR channel event:", evt.Event)
-				if evt.Event == "connected" && rdb != nil {
-					rdb.Del(context.Background(), "studex:wa:qr_code")
-				}
-			}
-		}
-	} else {
-		err = client.Connect()
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	// Wait until client is actually connected
-	for i := 0; i < 30; i++ {
-		if client.IsConnected() {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-	if !client.IsConnected() {
-		fmt.Println("Warning: client not connected after 30s")
-	}
-
-	fmt.Println("WhatsApp bot connected!")
-
 	initRedisClient(redisAddr)
 	go startRedisEventRelay(context.Background(), rdb, client)
 	go startGpsStatusRelay(context.Background(), rdb, client)
@@ -3388,15 +3348,125 @@ func runBot(redisAddr string) error {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
+	// Runtime toggle: the whatsmeow client only connects/processes while the
+	// Redis flag studex:config:whatsmeow_enabled is "true" (default true).
+	// A poll loop reconciles desired vs. actual connection state so the flag
+	// can be flipped from the dashboard without restarting the process. A
+	// pubsub subscription on studex:config:whatsmeow wakes the loop instantly.
+	wake := make(chan struct{}, 1)
+	go watchWhatsmeowFlag(wake)
+
+	if !isWhatsmeowEnabled() {
+		fmt.Println("Whatsmeow disabled by config flag; idling (HTTP/admin API still served)")
+	}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	for {
+		reconcileWhatsmeowConnection(client)
 		select {
 		case <-c:
-			client.Disconnect()
-			return nil
-		case <-time.After(30 * time.Second):
-			if !client.IsConnected() {
-				fmt.Println("Bot not connected, waiting for auto-reconnect...")
+			if client.IsConnected() {
+				client.Disconnect()
 			}
+			return nil
+		case <-wake:
+			// flag changed via pubsub, reconcile immediately
+		case <-ticker.C:
+			// periodic reconcile / connection health check
 		}
+	}
+}
+
+// isWhatsmeowEnabled reads the toggle flag from Redis. Default is enabled
+// (true) when the key is unset or Redis is unavailable.
+func isWhatsmeowEnabled() bool {
+	if rdb == nil {
+		return true
+	}
+	val, err := rdb.Get(context.Background(), "studex:config:whatsmeow_enabled").Result()
+	if err != nil {
+		return true // key unset or redis error -> default enabled
+	}
+	return val != "false"
+}
+
+// watchWhatsmeowFlag subscribes to the config pubsub channel and signals the
+// reconcile loop whenever the flag changes.
+func watchWhatsmeowFlag(wake chan<- struct{}) {
+	if rdb == nil {
+		return
+	}
+	sub := rdb.Subscribe(context.Background(), "studex:config:whatsmeow")
+	ch := sub.Channel()
+	for range ch {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// reconcileWhatsmeowConnection brings the whatsmeow client's actual connection
+// state in line with the desired state from the toggle flag. It is safe against
+// double-connect / double-disconnect.
+func reconcileWhatsmeowConnection(client *whatsmeow.Client) {
+	enabled := isWhatsmeowEnabled()
+	connected := client.IsConnected()
+
+	if enabled && !connected {
+		fmt.Println("Whatsmeow enabled: connecting client...")
+		connectWhatsmeow(client)
+	} else if !enabled && connected {
+		fmt.Println("Whatsmeow disabled: disconnecting client...")
+		client.Disconnect()
+	}
+}
+
+// connectWhatsmeow connects the whatsmeow client, handling first-time QR
+// pairing when no device is stored.
+func connectWhatsmeow(client *whatsmeow.Client) {
+	if client.Store.ID == nil {
+		qrChan, _ := client.GetQRChannel(context.Background())
+		if err := client.Connect(); err != nil {
+			fmt.Printf("Whatsmeow connect (QR) failed: %v\n", err)
+			return
+		}
+		go func() {
+			for evt := range qrChan {
+				if evt.Event == "code" {
+					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+					fmt.Println("QR code generated. Please scan with your WhatsApp app.")
+					if rdb != nil {
+						rdb.Set(context.Background(), "studex:wa:qr_code", evt.Code, 5*time.Minute)
+					}
+				} else {
+					fmt.Println("QR channel event:", evt.Event)
+					if evt.Event == "connected" && rdb != nil {
+						rdb.Del(context.Background(), "studex:wa:qr_code")
+					}
+				}
+			}
+		}()
+		return
+	}
+
+	if err := client.Connect(); err != nil {
+		fmt.Printf("Whatsmeow connect failed: %v\n", err)
+		return
+	}
+
+	// Wait until the client is actually connected (best-effort).
+	for i := 0; i < 30; i++ {
+		if client.IsConnected() {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if client.IsConnected() {
+		fmt.Println("WhatsApp bot connected!")
+	} else {
+		fmt.Println("Warning: client not connected after 30s")
 	}
 }
