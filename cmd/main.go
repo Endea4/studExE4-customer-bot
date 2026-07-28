@@ -41,6 +41,7 @@ func logErr(format string, args ...interface{}) {
 
 var apiGatewayURL string
 var wabaURL string
+var webAppBaseURL string
 
 var waClient *whatsmeow.Client
 var activeTripPartner = make(map[string]string)
@@ -654,6 +655,11 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 					sendMessage(client, senderJID, fmt.Sprintf("Driver search started!\nRequest ID: %s\nWaiting for match...", reqID))
 				} else {
 					sendMessage(client, senderJID, "Search started! Waiting for a driver match...")
+				}
+				if orderID, ok := result["order_id"].(string); ok && orderID != "" {
+					if link := buildTripLink(sender, orderID); link != "" {
+						sendMessage(client, senderJID, "Tawar harga, chat, dan lacak driver kamu di sini:\n"+link)
+					}
 				}
 			} else {
 				sendMessage(client, senderJID, "Failed to request ride. Type *?retry* to try again.")
@@ -1647,6 +1653,42 @@ func requestRideWithDetails(customerPhone string, pickupLat, pickupLng, destLat,
 	return result
 }
 
+// mintCustomerToken logs the customer in with the deterministic password
+// registerUser() sets on signup, to get a short-lived JWT for the trip web
+// app link. Never exposed to the user directly.
+func mintCustomerToken(phone string) string {
+	url := fmt.Sprintf("%s/auth/login", apiGatewayURL)
+	payload, _ := json.Marshal(map[string]string{"phone": phone, "password": "studex-" + phone})
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		logErr("mintCustomerToken HTTP failed: phone=%s err=%v", phone, err)
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logErr("mintCustomerToken failed: phone=%s status=%d", phone, resp.StatusCode)
+		return ""
+	}
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	tok, _ := result["token"].(string)
+	return tok
+}
+
+// buildTripLink returns the temporary web app link for bidding, chat and
+// driver-location tracking for a just-requested ride, or "" if a token
+// couldn't be minted (e.g. WEB_APP_BASE_URL not configured).
+func buildTripLink(phone, orderID string) string {
+	if webAppBaseURL == "" {
+		return ""
+	}
+	tok := mintCustomerToken(phone)
+	if tok == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s?oid=%s&tok=%s", webAppBaseURL, orderID, tok)
+}
+
 func hasActiveDebt(phone string) bool {
 	url := fmt.Sprintf("%s/drivers/debts/active?phone=%s", apiGatewayURL, phone)
 	resp, err := http.Get(url)
@@ -2525,6 +2567,11 @@ func handleMenuLetter(client *whatsmeow.Client, sender string, senderJID types.J
 				} else {
 					sendMessage(client, senderJID, "Search started! Waiting for a driver match...")
 				}
+				if orderID, ok := result["order_id"].(string); ok && orderID != "" {
+					if link := buildTripLink(sender, orderID); link != "" {
+						sendMessage(client, senderJID, "Tawar harga, chat, dan lacak driver kamu di sini:\n"+link)
+					}
+				}
 			} else {
 				sendMessage(client, senderJID, "Failed to request ride. Type *?retry* to try again.")
 			}
@@ -3210,6 +3257,7 @@ func main() {
 	config.LoadConfig()
 	apiGatewayURL = config.GetEnv("API_GATEWAY_URL", "http://localhost:9080")
 	wabaURL = config.GetEnv("WABA_SERVICE_URL", "http://localhost:9089")
+	webAppBaseURL = config.GetEnv("WEB_APP_BASE_URL", "")
 	redisAddr := config.GetEnv("REDIS_ADDR", "localhost:6379")
 	botPort := config.GetEnv("BOT_PORT", "9088")
 
