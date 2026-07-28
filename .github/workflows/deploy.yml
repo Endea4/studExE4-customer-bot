@@ -31,8 +31,13 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
+          # scp to a temp name first: the target path is a running binary,
+          # and opening it directly for write fails with ETXTBSY. rename is
+          # atomic and works fine while the old inode is still executing.
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            cbot "$SSH_USER@$SSH_HOST:/home/AgentZcy/endea4-services/cbot"
+            cbot "$SSH_USER@$SSH_HOST:/home/AgentZcy/endea4-services/cbot.new"
 
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" \
-            "docker compose -f /home/AgentZcy/endea4-docker/docker-compose.yml restart cbot"
+            "chmod +x /home/AgentZcy/endea4-services/cbot.new && \
+             mv /home/AgentZcy/endea4-services/cbot.new /home/AgentZcy/endea4-services/cbot && \
+             docker compose -f /home/AgentZcy/endea4-docker/docker-compose.yml restart cbot"
