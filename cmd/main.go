@@ -651,15 +651,15 @@ func eventHandler(evt interface{}, client *whatsmeow.Client) {
 			sendMessage(client, senderJID, fmt.Sprintf("Retrying last ride...\nPickup: %.4f, %.4f\nDest: %.4f, %.4f\nService: %s", state.LastPickupLat, state.LastPickupLng, state.LastDestLat, state.LastDestLng, serviceName(svcType)))
 			result := requestRide(sender, state.LastPickupLat, state.LastPickupLng, state.LastDestLat, state.LastDestLng, svcType)
 			if result != nil {
-				if reqID, ok := result["request_id"].(string); ok {
-					sendMessage(client, senderJID, fmt.Sprintf("Driver search started!\nRequest ID: %s\nWaiting for match...", reqID))
+				orderID, _ := result["order_id"].(string)
+				var link string
+				if orderID != "" {
+					link = buildTripLink(sender, orderID, state.LastPickupLat, state.LastPickupLng, state.LastDestLat, state.LastDestLng, svcType)
+				}
+				if link != "" {
+					sendMessage(client, senderJID, "Pesanan kamu sedang dicari driver! Pantau, tawar harga, chat, dan lacak driver di sini:\n"+link)
 				} else {
 					sendMessage(client, senderJID, "Search started! Waiting for a driver match...")
-				}
-				if orderID, ok := result["order_id"].(string); ok && orderID != "" {
-					if link := buildTripLink(sender, orderID); link != "" {
-						sendMessage(client, senderJID, "Tawar harga, chat, dan lacak driver kamu di sini:\n"+link)
-					}
 				}
 			} else {
 				sendMessage(client, senderJID, "Failed to request ride. Type *?retry* to try again.")
@@ -1677,8 +1677,11 @@ func mintCustomerToken(phone string) string {
 
 // buildTripLink returns the temporary web app link for bidding, chat and
 // driver-location tracking for a just-requested ride, or "" if a token
-// couldn't be minted (e.g. WEB_APP_BASE_URL not configured).
-func buildTripLink(phone, orderID string) string {
+// couldn't be minted (e.g. WEB_APP_BASE_URL not configured). Pickup/dest/
+// service are embedded so the page can self-serve a retry if matching
+// times out with no driver found, without depending on matching-service's
+// transient request data still being around.
+func buildTripLink(phone, orderID string, pickupLat, pickupLng, destLat, destLng float64, serviceType string) string {
 	if webAppBaseURL == "" {
 		return ""
 	}
@@ -1686,7 +1689,8 @@ func buildTripLink(phone, orderID string) string {
 	if tok == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s?oid=%s&tok=%s", webAppBaseURL, orderID, tok)
+	return fmt.Sprintf("%s?oid=%s&tok=%s&plat=%f&plng=%f&dlat=%f&dlng=%f&svc=%s",
+		webAppBaseURL, orderID, tok, pickupLat, pickupLng, destLat, destLng, serviceType)
 }
 
 func hasActiveDebt(phone string) bool {
@@ -2562,15 +2566,15 @@ func handleMenuLetter(client *whatsmeow.Client, sender string, senderJID types.J
 			sendMessage(client, senderJID, "Searching for drivers...")
 			result := requestRideWithDetails(sender, state.PickupLat, state.PickupLng, state.DestLat, state.DestLng, state.ServiceType, state.CustomRequests, state.ItemDetail, state.GenderPref)
 			if result != nil {
-				if reqID, ok := result["request_id"].(string); ok {
-					sendMessage(client, senderJID, fmt.Sprintf("Driver search started!\nRequest ID: %s\nWaiting for match...", reqID))
+				orderID, _ := result["order_id"].(string)
+				var link string
+				if orderID != "" {
+					link = buildTripLink(sender, orderID, state.PickupLat, state.PickupLng, state.DestLat, state.DestLng, state.ServiceType)
+				}
+				if link != "" {
+					sendMessage(client, senderJID, "Pesanan kamu sedang dicari driver! Pantau, tawar harga, chat, dan lacak driver di sini:\n"+link)
 				} else {
 					sendMessage(client, senderJID, "Search started! Waiting for a driver match...")
-				}
-				if orderID, ok := result["order_id"].(string); ok && orderID != "" {
-					if link := buildTripLink(sender, orderID); link != "" {
-						sendMessage(client, senderJID, "Tawar harga, chat, dan lacak driver kamu di sini:\n"+link)
-					}
 				}
 			} else {
 				sendMessage(client, senderJID, "Failed to request ride. Type *?retry* to try again.")

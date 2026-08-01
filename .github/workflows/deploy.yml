@@ -5,27 +5,64 @@ on:
     branches: [dev]
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
+    # customer-bot uses go-sqlite3 (via whatsmeow) for its WhatsApp session
+    # store, which needs real cgo -- CGO_ENABLED=0 compiles it into a stub
+    # that crash-loops at runtime (this bit us once already). Building with
+    # musl + `-linkmode external -extldflags "-static"` produces a fully
+    # static binary (verified via `file`: no dynamic interpreter at all),
+    # so it has zero library-version dependency on the target host -- a
+    # plain musl build alone is NOT enough, since it still dynamically
+    # links against musl's loader, which glibc-based debian:stable-slim
+    # (the actual target container) doesn't even have installed.
+    container:
+      image: golang:1.25-alpine
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
+      - name: Install build deps
+        run: apk add --no-cache gcc musl-dev
 
       - name: Build
-        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o cbot ./cmd
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+            -ldflags '-linkmode external -extldflags "-static"' \
+            -o cbot ./cmd
 
-      # Ships the binary to the exact bind-mounted path for the "cbot" service
-      # and restarts only that one container. Never touches the compose file,
-      # any other service, or any other app on the shared host.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cbot-binary
+          path: cbot
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cbot-binary
+
+      # Ships the binary to the exact bind-mounted path for the "cbot"
+      # service and recreates only that one container. Never touches the
+      # compose file, any other service, or any other app on the shared host.
+      # Uses `up -d --force-recreate`, not `restart`: restart resumes the
+      # existing container with whatever env it was created with and does
+      # NOT re-read env_file, so env changes since creation would silently
+      # never take effect. Plain `up -d` alone isn't enough either -- if
+      # Compose sees no config diff (e.g. only the bind-mounted binary on
+      # disk changed, not the compose file itself) it skips recreation
+      # entirely, so the new binary would sit on disk but never actually
+      # get loaded into a running process. --force-recreate guarantees a
+      # fresh container (and thus a fresh exec of the new binary) every time.
       - name: Deploy
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           SSH_HOST: ${{ secrets.DEPLOY_HOST }}
           SSH_USER: ${{ secrets.DEPLOY_USER }}
         run: |
+          chmod +x cbot
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -40,4 +77,4 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" \
             "chmod +x /home/AgentZcy/endea4-services/cbot.new && \
              mv /home/AgentZcy/endea4-services/cbot.new /home/AgentZcy/endea4-services/cbot && \
-             docker compose -f /home/AgentZcy/endea4-docker/docker-compose.yml restart cbot"
+             docker compose -f /home/AgentZcy/endea4-docker/docker-compose.yml up -d --force-recreate cbot"
