@@ -2313,6 +2313,20 @@ func handleRelayEvent(client *whatsmeow.Client, evt events.Event) {
 			if !ok || drvState == nil || drvState.ActiveTrip != orderID {
 				return
 			}
+			// Authoritative check against trip-service before committing to
+			// "no response": the in-memory ActiveTrip check above can race
+			// with the accept handler (unsynchronized map, no mutex), so a
+			// trip that was actually accepted moments ago could still slip
+			// past it. trip-service's own record is the source of truth --
+			// only proceed if it agrees the driver genuinely never responded.
+			if trip := getDriverActiveTrip(drvPhone); trip != nil {
+				if tripOrderID, _ := trip["order_id"].(string); tripOrderID == orderID {
+					if status, _ := trip["status"].(string); status != "pending_acceptance" {
+						fmt.Printf("[MATCH-TIMEOUT-SKIP] driver=%s order=%s already progressed to status=%s, not auto-rejecting\n", drvPhone, orderID, status)
+						return
+					}
+				}
+			}
 			fmt.Printf("[MATCH-TIMEOUT] driver=%s order=%s — ignored, auto-rejecting\n", drvPhone, orderID)
 			drvState.ActiveTrip = ""
 			drvState.CurrentBidPrice = 0
