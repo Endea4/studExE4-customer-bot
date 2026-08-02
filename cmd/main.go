@@ -2367,7 +2367,11 @@ func handleRelayEvent(client *whatsmeow.Client, evt events.Event) {
 		if strings.HasPrefix(driverPhone, "62") && data.LastBidder == "customer" {
 			sendMessage(client, waJID(driverPhone), fmt.Sprintf("Customer bids Rp %.0f\nReason: -\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", data.CurrentBidPrice))
 		}
-		if strings.HasPrefix(customerPhone, "62") && data.LastBidder == "driver" {
+		// Skip the WhatsApp bid notification to the customer when the temp
+		// web app is active (it shows this live already) -- gated on
+		// webAppBaseURL so this comes back on its own if the web app is
+		// ever disabled again, no code change needed.
+		if webAppBaseURL == "" && strings.HasPrefix(customerPhone, "62") && data.LastBidder == "driver" {
 			sendMessage(client, waJID(customerPhone), fmt.Sprintf("Driver bids Rp %.0f\nReason: -\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", data.CurrentBidPrice))
 		}
 
@@ -3008,7 +3012,13 @@ func doBid(client *whatsmeow.Client, sender string, senderJID types.JID, state *
 			state.LastBidder = "driver"
 			custPhone := resolvePhone(fmt.Sprintf("%v", trip["customer_ref_id"]))
 			if custPhone != "" {
-					sendMessage(client, waJID(custPhone), fmt.Sprintf("Driver bids Rp %.0f\nReason: %s\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", amount, reason))
+					// Skip the WhatsApp notification when the temp web app is
+					// active (it shows this live already) -- gated on
+					// webAppBaseURL so it comes back on its own if the web app
+					// is ever disabled again.
+					if webAppBaseURL == "" {
+						sendMessage(client, waJID(custPhone), fmt.Sprintf("Driver bids Rp %.0f\nReason: %s\n\n?deal — Accept current price\n?bid <amount> <reason> — Counter bid", amount, reason))
+					}
 					if custState, ok := loadUserState(custPhone); ok && custState != nil {
 						custState.CurrentBidPrice = amount
 						custState.LastBidder = "driver"
